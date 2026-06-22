@@ -1,0 +1,51 @@
+# =============================================================================
+# SurplusToken — New API Docker Build
+# Build context: surplustoken/ (parent of deploy/)
+# Builds New API with our custom OAuth proxy controller and frontend mods.
+# =============================================================================
+
+# ---- Stage 1: Build default frontend ----
+FROM oven/bun:1 AS builder-default
+WORKDIR /app/web/default
+
+# Copy dependency manifests first for caching
+COPY new-api/web/default/package.json new-api/web/default/bun.lock* ./
+RUN bun install --frozen-lockfile
+
+# Copy frontend source (includes our oauth-accounts feature + route)
+COPY new-api/web/default/ ./
+ARG VERSION=dev
+ENV VITE_REACT_APP_VERSION=${VERSION}
+RUN bun run build
+
+# ---- Stage 2: Build Go backend ----
+FROM golang:1.26-alpine AS builder-go
+WORKDIR /app
+RUN apk add --no-cache git build-base
+
+# Copy Go module files first for layer caching
+COPY new-api/go.mod new-api/go.sum ./
+RUN go mod download
+
+# Copy all backend source (includes our oauth_proxy.go controller + router changes)
+COPY new-api/ ./
+
+# Copy built frontend into embed location
+COPY --from=builder-default /app/web/default/dist ./web/default/dist
+
+# Build with embedded frontend
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=${VERSION}'" \
+    -o new-api .
+
+# ---- Stage 3: Runtime ----
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata wget curl
+ENV TZ=Asia/Shanghai
+WORKDIR /data
+COPY --from=builder-go /app/new-api /usr/local/bin/new-api
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD wget -q -O - http://localhost:3000/api/status || exit 1
+ENTRYPOINT ["new-api"]

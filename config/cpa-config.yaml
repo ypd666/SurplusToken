@@ -1,0 +1,118 @@
+# =============================================================================
+# SurplusToken - CPA Gateway Configuration
+# =============================================================================
+
+host: "0.0.0.0"
+port: 8317
+
+# ---- Remote Management (for New API OAuth proxy) ----
+remote-management:
+  allow-remote: true
+  # bcrypt hash of "surplustoken-admin" — CHANGE THIS in production
+  secret-key: "$2a$10$placeholder_bcrypt_hash_change_me"
+  disable-control-panel: false
+
+# ---- API Keys (New API uses these to forward requests) ----
+api-keys:
+  - "sk-surplustoken-gateway-internal"
+
+# ---- OAuth Credential Storage ----
+auth-dir: "/data/auths"
+
+# ---- Debug & Logging ----
+debug: false
+logging-to-file: true
+logs-max-total-size-mb: 100
+
+# ---- Routing Strategy ----
+routing:
+  strategy: "round-robin"
+  session-affinity: true
+  session-affinity-ttl: "1h"
+
+# ---- Request Retry ----
+request-retry: 2
+max-retry-credentials: 5
+
+# ---- Auth Cooldown on 429 ----
+disable-cooling: false
+save-cooldown-status: true
+
+# ---- WS Auth ----
+ws-auth: true
+
+# ---- Codex Behavior ----
+codex:
+  identity-confuse: false
+
+# =============================================================================
+# OpenAI-Compatible Providers (DeepSeek, GLM, Kimi, etc.)
+# Configure your API keys below.
+# =============================================================================
+openai-compatibility:
+  # ---- DeepSeek ----
+  - name: "deepseek"
+    base-url: "https://api.deepseek.com/v1"
+    api-key-entries:
+      - api-key: "sk-your-deepseek-key-here"
+    models:
+      - name: "deepseek-chat"
+        alias: "deepseek-chat"
+      - name: "deepseek-reasoner"
+        alias: "deepseek-reasoner"
+
+  # ---- GLM (Zhipu) ----
+  - name: "zhipu"
+    base-url: "https://open.bigmodel.cn/api/paas/v4"
+    api-key-entries:
+      - api-key: "your-zhipu-api-key-here"
+    models:
+      - name: "glm-4-flash"
+        alias: "glm-4-flash"
+      - name: "glm-4-plus"
+        alias: "glm-4-plus"
+      - name: "glm-4.5"
+        alias: "glm-4.5"
+
+  # ---- Kimi (Moonshot) ----
+  - name: "moonshot"
+    base-url: "https://api.moonshot.cn/v1"
+    api-key-entries:
+      - api-key: "sk-your-kimi-key-here"
+    models:
+      - name: "moonshot-v1-8k"
+        alias: "moonshot-v1-8k"
+      - name: "moonshot-v1-32k"
+        alias: "moonshot-v1-32k"
+      - name: "moonshot-v1-128k"
+        alias: "moonshot-v1-128k"
+      - name: "kimi-latest"
+        alias: "kimi-latest"
+
+  # ---- Qwen (Tongyi) ----
+  - name: "qwen"
+    base-url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    api-key-entries:
+      - api-key: "sk-your-qwen-key-here"
+    models:
+      - name: "qwen-plus"
+        alias: "qwen-plus"
+      - name: "qwen-max"
+        alias: "qwen-max"
+      - name: "qwen-turbo"
+        alias: "qwen-turbo"
+      - name: "qwen-coder-plus"
+        alias: "qwen-coder-plus"
+
+# =============================================================================
+# OAuth Providers (uncomment and configure as needed)
+# =============================================================================
+
+# ---- Quota Exceeded Behavior ----
+quota-exceeded:
+  switch-project: true
+  switch-preview-model: true
+  antigravity-credits: false
+
+# ---- Non-streaming Keepalive ----
+nonstream-keepalive-interval: 15

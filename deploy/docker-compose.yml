@@ -1,0 +1,144 @@
+# =============================================================================
+# SurplusToken — Docker Compose Deployment
+#
+# Services:
+#   postgres  — PostgreSQL 15 (user data, channels, logs)
+#   redis     — Redis 7 (cache, rate limiting, sessions)
+#   cpa       — CPA Gateway (OAuth, protocol conversion, upstream routing)
+#   new-api   — New API (user management, billing, web UI)
+#
+# Quick start:
+#   1. cp .env.example .env && edit .env
+#   2. docker compose up -d
+#   3. Open http://localhost:3000
+# =============================================================================
+
+services:
+  # ---- PostgreSQL ----
+  postgres:
+    image: postgres:15-alpine
+    container_name: surplustoken-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-surplustoken}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Please set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-surplustoken}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-surplustoken} -d ${POSTGRES_DB:-surplustoken}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - surplustoken-net
+
+  # ---- Redis ----
+  redis:
+    image: redis:7-alpine
+    container_name: surplustoken-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:?Please set REDIS_PASSWORD in .env}
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - surplustoken-net
+
+  # ---- CPA Gateway (CLIProxyAPI) ----
+  cpa:
+    image: eceasy/cli-proxy-api:latest
+    container_name: surplustoken-cpa
+    restart: unless-stopped
+    pull_policy: always
+    ports:
+      - "${CPA_PORT:-8317}:8317"
+      # OAuth callback ports (must be publicly accessible)
+      - "1455:1455"    # Codex callback
+      - "54545:54545"  # Claude callback
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      - ../config/cpa-config.yaml:/CLIProxyAPI/config.yaml:ro
+      - cpa_auths:/root/.cli-proxy-api
+      - cpa_logs:/CLIProxyAPI/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8317/v0/management/get-auth-status?state=ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - surplustoken-net
+
+  # ---- New API (Management + Web UI) ----
+  new-api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.new-api
+      args:
+        VERSION: ${VERSION:-dev}
+    # Fallback to pre-built image when not building locally:
+    # image: calciumion/new-api:latest
+    container_name: surplustoken-new-api
+    restart: unless-stopped
+    ports:
+      - "${NEW_API_PORT:-3000}:3000"
+    environment:
+      TZ: Asia/Shanghai
+      # Database
+      SQL_DSN: "host=postgres port=5432 user=${POSTGRES_USER:-surplustoken} password=${POSTGRES_PASSWORD} dbname=${POSTGRES_DB:-surplustoken} sslmode=disable"
+      # Redis
+      REDIS_CONN_STRING: "redis://:${REDIS_PASSWORD}@redis:6379"
+      # Secrets
+      SESSION_SECRET: ${SESSION_SECRET:?Please set SESSION_SECRET in .env}
+      JWT_SECRET: ${JWT_SECRET:?Please set JWT_SECRET in .env}
+      CRYPTO_KEY: ${CRYPTO_KEY:?Please set CRYPTO_KEY in .env}
+      # CPA gateway connection
+      CPA_BASE_URL: "http://cpa:8317"
+      CPA_MANAGEMENT_KEY: ${CPA_MANAGEMENT_KEY}
+      # Logging
+      ERROR_LOG_ENABLED: "true"
+      BATCH_UPDATE_ENABLED: "true"
+      STREAMING_TIMEOUT: "300"
+      # Relay timeout (seconds, 0 = default 300s)
+      RELAY_TIMEOUT: "0"
+    volumes:
+      - new_api_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      cpa:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3000/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - surplustoken-net
+
+networks:
+  surplustoken-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  cpa_auths:
+  cpa_logs:
+  new_api_logs:

@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Environment
+.env
+!.env.example
+
+# Temp
+/tmp/
+*.tar.gz
+
+# Docker
+docker-compose.override.yml
+
+# CPA binary (deploy pre-built image)
+cpa/cli-proxy-api
+cpa/auths/
+cpa/logs/
+
+# New API build artifacts
+new-api/web/default/dist/
+new-api/web/classic/dist/
+new-api/new-api
