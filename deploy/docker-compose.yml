@@ -67,7 +67,8 @@ services:
     environment:
       TZ: Asia/Shanghai
     volumes:
-      - ../config/cpa-config.yaml:/CLIProxyAPI/config.yaml:ro
+      - ../config/cpa-config.yaml:/CLIProxyAPI/config.yaml
+      - ../cpa-panel/management.html:/CLIProxyAPI/management.html:ro
       - cpa_auths:/root/.cli-proxy-api
       - cpa_logs:/CLIProxyAPI/logs
     depends_on:
@@ -76,7 +77,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8317/v0/management/get-auth-status?state=ping"]
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8317 && echo OK"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -85,13 +86,8 @@ services:
 
   # ---- New API (Management + Web UI) ----
   new-api:
-    build:
-      context: ..
-      dockerfile: deploy/Dockerfile.new-api
-      args:
-        VERSION: ${VERSION:-dev}
-    # Fallback to pre-built image when not building locally:
-    # image: calciumion/new-api:latest
+    # Use our locally-built image (already built: surplustoken-new-api:latest)
+    image: surplustoken-new-api:latest
     container_name: surplustoken-new-api
     restart: unless-stopped
     ports:
@@ -99,7 +95,7 @@ services:
     environment:
       TZ: Asia/Shanghai
       # Database
-      SQL_DSN: "host=postgres port=5432 user=${POSTGRES_USER:-surplustoken} password=${POSTGRES_PASSWORD} dbname=${POSTGRES_DB:-surplustoken} sslmode=disable"
+      SQL_DSN: "postgres://${POSTGRES_USER:-surplustoken}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-surplustoken}?sslmode=disable"
       # Redis
       REDIS_CONN_STRING: "redis://:${REDIS_PASSWORD}@redis:6379"
       # Secrets

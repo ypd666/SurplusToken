@@ -44,3 +44,5 @@ cpa/logs/
 new-api/web/default/dist/
 new-api/web/classic/dist/
 new-api/new-api
+cpa-panel/dist/
+cpa-panel/node_modules/

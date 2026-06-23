@@ -4,24 +4,54 @@
 # Builds New API with our custom OAuth proxy controller and frontend mods.
 # =============================================================================
 
-# ---- Stage 1: Build default frontend ----
+# ---- Proxy args (passed via --build-arg) ----
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+
+# ---- Stage 1: Build default frontend (bun workspace) ----
 FROM oven/bun:1 AS builder-default
-WORKDIR /app/web/default
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY}
+WORKDIR /app/web
 
-# Copy dependency manifests first for caching
-COPY new-api/web/default/package.json new-api/web/default/bun.lock* ./
-RUN bun install --frozen-lockfile
+# Copy workspace root files (package.json has catalog definitions, bun.lock has resolved deps)
+COPY new-api/web/package.json new-api/web/bun.lock ./
 
-# Copy frontend source (includes our oauth-accounts feature + route)
-COPY new-api/web/default/ ./
+# Copy workspace member package.json files
+COPY new-api/web/default/package.json ./default/
+COPY new-api/web/classic/package.json ./classic/
+
+# Install dependencies at workspace level (resolves catalog: references)
+RUN bun install
+
+# Copy full workspace source (default theme with our oauth-accounts feature)
+COPY new-api/web/ ./
 ARG VERSION=dev
 ENV VITE_REACT_APP_VERSION=${VERSION}
-RUN bun run build
+# Build only the default theme
+RUN bun run --cwd default build
 
 # ---- Stage 2: Build Go backend ----
 FROM golang:1.26-alpine AS builder-go
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ARG NO_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY} \
+    HTTPS_PROXY=${HTTPS_PROXY} \
+    NO_PROXY=${NO_PROXY} \
+    GOPROXY=https://goproxy.cn,direct \
+    GOSUMDB=sum.golang.google.cn \
+    GONOSUMCHECK='*' \
+    GOINSECURE=''
 WORKDIR /app
-RUN apk add --no-cache git build-base
+
+# git is already included in golang:alpine image
+# Skip apk add — use pre-installed tools only
 
 # Copy Go module files first for layer caching
 COPY new-api/go.mod new-api/go.sum ./
@@ -32,6 +62,10 @@ COPY new-api/ ./
 
 # Copy built frontend into embed location
 COPY --from=builder-default /app/web/default/dist ./web/default/dist
+# Also copy workspace root (needed by embed)
+COPY --from=builder-default /app/web/package.json ./web/package.json
+# Create minimal classic dist to satisfy embed (we only use default theme)
+RUN mkdir -p ./web/classic/dist && echo '<!doctype html><html><body>Use default theme</body></html>' > ./web/classic/dist/index.html
 
 # Build with embedded frontend
 ARG VERSION=dev
