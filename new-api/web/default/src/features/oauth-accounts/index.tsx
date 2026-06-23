@@ -104,7 +104,8 @@ export function OAuthAccounts() {
   }
 
   const handleDisconnect = (authFile: OAuthAuthFile) => {
-    deleteMutation.mutate(authFile.id)
+    // CPA identifies auth-files by name; fall back to id if name is absent.
+    deleteMutation.mutate(encodeURIComponent(authFile.name || authFile.id))
   }
 
   const authFiles = authFilesQuery.data?.data || []
@@ -161,7 +162,7 @@ export function OAuthAccounts() {
           <CardHeader>
             <CardTitle>{t('Connected Accounts')}</CardTitle>
             <p className='text-muted-foreground text-sm'>
-              {t('These OAuth accounts are being used to serve AI requests. Disconnecting an account will remove it from the scheduling pool.')}
+              {t('These OAuth accounts are being used to serve AI requests. Only the contributor or an admin can disconnect an account.')}
             </p>
           </CardHeader>
           <CardContent>
@@ -180,6 +181,7 @@ export function OAuthAccounts() {
                     <tr className='border-b text-left'>
                       <th className='pb-2 font-medium'>{t('Provider')}</th>
                       <th className='pb-2 font-medium'>{t('Account')}</th>
+                      <th className='pb-2 font-medium'>{t('Contributor')}</th>
                       <th className='pb-2 font-medium'>{t('Status')}</th>
                       <th className='pb-2 text-right font-medium'>{t('Actions')}</th>
                     </tr>
@@ -197,6 +199,15 @@ export function OAuthAccounts() {
                           {af.email || af.name || af.id}
                         </td>
                         <td className='py-3'>
+                          {af.is_mine ? (
+                            <Badge variant='success' className='text-xs'>{t('You')}</Badge>
+                          ) : af.owner_name ? (
+                            <span className='text-muted-foreground'>{af.owner_name}</span>
+                          ) : (
+                            <span className='text-muted-foreground'>—</span>
+                          )}
+                        </td>
+                        <td className='py-3'>
                           {af.disabled ? (
                             <Badge variant='destructive'>{t('Disabled')}</Badge>
                           ) : af.quota?.exceeded ? (
@@ -206,31 +217,42 @@ export function OAuthAccounts() {
                           )}
                         </td>
                         <td className='py-3 text-right'>
-                          <AlertDialog>
-                            <AlertDialogTrigger asChild>
-                              <Button variant='ghost' size='sm'>
-                                {t('Disconnect')}
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>{t('Disconnect Account')}</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  {t('Are you sure you want to disconnect this account? It will no longer be available for AI requests.')}
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <Button
-                                  variant='destructive'
-                                  onClick={() => handleDisconnect(af)}
-                                  disabled={deleteMutation.isPending}
-                                >
-                                  {deleteMutation.isPending ? <Spinner className='mr-2 h-4 w-4' /> : null}
+                          {af.can_delete === false ? (
+                            <Button
+                              variant='ghost'
+                              size='sm'
+                              disabled
+                              title={t('Only the contributor or an admin can disconnect this account')}
+                            >
+                              {t('Disconnect')}
+                            </Button>
+                          ) : (
+                            <AlertDialog>
+                              <AlertDialogTrigger asChild>
+                                <Button variant='ghost' size='sm'>
                                   {t('Disconnect')}
                                 </Button>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
+                              </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>{t('Disconnect Account')}</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    {t('Are you sure you want to disconnect this account? It will no longer be available for AI requests.')}
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <Button
+                                    variant='destructive'
+                                    onClick={() => handleDisconnect(af)}
+                                    disabled={deleteMutation.isPending}
+                                  >
+                                    {deleteMutation.isPending ? <Spinner className='mr-2 h-4 w-4' /> : null}
+                                    {t('Disconnect')}
+                                  </Button>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
+                          )}
                         </td>
                       </tr>
                     ))}

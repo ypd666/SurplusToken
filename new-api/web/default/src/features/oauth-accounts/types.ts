@@ -21,6 +21,11 @@ export interface OAuthAuthFile {
     next_retry_after?: string
   }
   models?: string[]
+  // Contribution-protection metadata (added by the backend proxy)
+  owner_user_id?: number
+  owner_name?: string
+  is_mine?: boolean
+  can_delete?: boolean
 }
 
 export interface OAuthAuthorizeResponse {
