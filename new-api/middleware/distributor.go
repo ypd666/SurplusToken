@@ -103,7 +103,8 @@ func Distribute() func(c *gin.Context) {
 
 				// SurplusToken: contributed-account pool routing — owner pins their own
 				// account; other users get an account with remaining shared capacity.
-				if usingGroup == service.PoolGroup {
+				// Engages for any pool/tier group (pool, contributor, pro/prolite/plus).
+				if service.IsPoolGroup(usingGroup) {
 					poolCh, poolErr := service.ResolvePoolChannel(c, modelRequest.Model)
 					if poolErr != nil {
 						abortWithOpenAiMessage(c, http.StatusServiceUnavailable, poolErr.Error(), types.ErrorCodeModelNotFound)

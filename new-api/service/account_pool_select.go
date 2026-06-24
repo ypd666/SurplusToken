@@ -7,6 +7,7 @@ package service
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -14,9 +15,27 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// PoolGroup is the user group whose requests are routed through the contributed
-// account reservation pool.
+// PoolGroup is the channel group that holds the contributed-account channels.
 const PoolGroup = "pool"
+
+// poolGroups is the set of USER groups whose requests are routed through the
+// contributed-account reservation pool (owner routing + share caps + reward).
+// Tiers like pro/prolite/plus consume the pool at their own group ratio; the
+// contributor group lets owners use their own accounts. Override via the
+// POOL_GROUPS env var (comma-separated).
+var poolGroups = func() map[string]bool {
+	raw := common.GetEnvOrDefaultString("POOL_GROUPS", "pool,contributor,pro,prolite,plus")
+	m := map[string]bool{}
+	for _, g := range strings.Split(raw, ",") {
+		if g = strings.TrimSpace(g); g != "" {
+			m[g] = true
+		}
+	}
+	return m
+}()
+
+// IsPoolGroup reports whether requests in this user group go through the pool.
+func IsPoolGroup(group string) bool { return poolGroups[group] }
 
 const (
 	fiveHourSeconds = 5 * 3600
