@@ -7,6 +7,7 @@
     "Copy the FULL address from that page address bar (it starts with http://localhost and contains code= and state=).": "复制那个页面地址栏里的完整网址(以 http://localhost 开头,包含 code= 和 state=)。",
     "Paste it below and click Finish.": "粘贴到下面,点「完成连接」。",
     "Finish connecting": "完成连接",
+    "Transferred {{n}} to your wallet": "已转入钱包 {{n}}",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

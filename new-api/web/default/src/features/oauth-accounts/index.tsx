@@ -30,6 +30,7 @@ import {
 } from './api'
 import type { OAuthProvider, OAuthAuthFile, AccountOwner } from './types'
 import { useIsAdmin } from '@/hooks/use-admin'
+import { formatQuotaWithCurrency } from '@/lib/currency'
 
 function ProviderIcon({ icon }: { icon: string }) {
   const icons: Record<string, string> = {
@@ -86,7 +87,7 @@ export function OAuthAccounts() {
     mutationFn: transferContribution,
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['oauth-contribution'] })
-      toast.success(t('Transferred {{n}} quota to your wallet', { n: res.data?.moved ?? 0 }))
+      toast.success(t('Transferred {{n}} to your wallet', { n: formatQuotaWithCurrency(res.data?.moved ?? 0) }))
     },
     onError: () => toast.error(t('Transfer failed')),
   })
@@ -249,10 +250,12 @@ export function OAuthAccounts() {
               <div className='text-sm'>
                 <div>
                   {t('Available')}:{' '}
-                  <span className='font-medium'>{contributionQuery.data?.data?.accrued ?? 0}</span>
+                  <span className='font-medium'>
+                    {formatQuotaWithCurrency(contributionQuery.data?.data?.accrued ?? 0)}
+                  </span>
                 </div>
                 <div className='text-muted-foreground'>
-                  {t('Transferred')}: {contributionQuery.data?.data?.transferred ?? 0}
+                  {t('Transferred')}: {formatQuotaWithCurrency(contributionQuery.data?.data?.transferred ?? 0)}
                 </div>
               </div>
               <Button
