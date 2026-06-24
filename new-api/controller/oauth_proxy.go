@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 )
@@ -98,6 +99,17 @@ func authFileName(f map[string]interface{}) string {
 	if v, ok := f["name"].(string); ok && v != "" {
 		return v
 	}
+	switch v := f["id"].(type) {
+	case string:
+		return v
+	case float64:
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	}
+	return ""
+}
+
+// authFileID returns the CPA auth.ID (used as the X-Pinned-Auth-Id value).
+func authFileID(f map[string]interface{}) string {
 	switch v := f["id"].(type) {
 	case string:
 		return v
@@ -215,10 +227,112 @@ func captureOAuthOwnership(state, provider string, userId int, before map[string
 					continue
 				}
 				_ = model.SetOAuthFileOwner(n, userId, provider)
+				provisionPoolAccount(ctx, n, authFileID(f), provider, userId)
 			}
 			return
 		}
 	}
+}
+
+// =============================================================================
+// Pool channel provisioning (contribution reservation)
+//
+// Each contributed account becomes a dedicated OpenAI-compatible channel in the
+// "pool" group, carrying an X-Pinned-Auth-Id header so the (patched) CPA pins
+// every request routed through that channel to this exact upstream account.
+// =============================================================================
+
+const poolChannelGroup = "pool"
+
+// cpaChannelTemplate clones base_url + inbound key from an existing CPA channel
+// so pool channels target the same gateway identically.
+func cpaChannelTemplate() (baseURL, key string) {
+	baseURL, key = "http://cpa:8317", "sk-surplustoken-gateway-internal"
+	var ch model.Channel
+	if err := model.DB.Where("base_url LIKE ?", "%cpa:8317%").First(&ch).Error; err == nil {
+		if ch.BaseURL != nil && *ch.BaseURL != "" {
+			baseURL = *ch.BaseURL
+		}
+		if ch.Key != "" {
+			key = ch.Key
+		}
+	}
+	return
+}
+
+// fetchAuthFileModels returns the model ids a given auth-file can serve.
+func fetchAuthFileModels(ctx context.Context, authFile string) []string {
+	resp, err := cpaDo(ctx, http.MethodGet, "/v0/management/auth-files/models?name="+url.QueryEscape(authFile), nil)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var parsed struct {
+		Models []map[string]interface{} `json:"models"`
+	}
+	if json.Unmarshal(raw, &parsed) != nil {
+		return nil
+	}
+	out := make([]string, 0, len(parsed.Models))
+	for _, m := range parsed.Models {
+		if id, ok := m["id"].(string); ok && id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// provisionPoolAccount creates the pool channel + entry for a contributed account.
+func provisionPoolAccount(ctx context.Context, authFile, authId, provider string, ownerUserId int) {
+	if authId == "" {
+		return
+	}
+	if e, ok := model.GetAccountPoolEntryByAuthFile(authFile); ok && e.ChannelId != 0 {
+		return // already provisioned
+	}
+	models := fetchAuthFileModels(ctx, authFile)
+	if len(models) == 0 {
+		common.SysLog("pool: no models for auth-file " + authFile + "; skipping channel creation")
+		return
+	}
+	baseURL, key := cpaChannelTemplate()
+	headerOverride := fmt.Sprintf(`{"X-Pinned-Auth-Id":%q}`, authId)
+	ch := model.Channel{
+		Type:           constant.ChannelTypeOpenAI,
+		Name:           "pool:" + authFile,
+		Key:            key,
+		BaseURL:        &baseURL,
+		Group:          poolChannelGroup,
+		Models:         strings.Join(models, ","),
+		Status:         common.ChannelStatusEnabled,
+		HeaderOverride: &headerOverride,
+	}
+	if err := ch.Insert(); err != nil {
+		common.SysLog("pool: failed to create channel for " + authFile + ": " + err.Error())
+		return
+	}
+	_ = model.UpsertAccountPoolEntry(&model.AccountPoolEntry{
+		AuthFile:       authFile,
+		AuthId:         authId,
+		OwnerUserId:    ownerUserId,
+		ChannelId:      ch.Id,
+		ShareCap5h:     model.DefaultShareCap5h,
+		ShareCapWeekly: model.DefaultShareCapWeekly,
+		RewardRatio:    model.DefaultRewardRatio,
+		Enabled:        true,
+	})
+	model.InitChannelCache()
+}
+
+// deprovisionPoolAccount removes the channel + pool entry for a disconnected account.
+func deprovisionPoolAccount(authFile string) {
+	if e, ok := model.GetAccountPoolEntryByAuthFile(authFile); ok && e.ChannelId != 0 {
+		ch := model.Channel{Id: e.ChannelId}
+		_ = ch.Delete()
+	}
+	_ = model.DeleteAccountPoolEntryByAuthFile(authFile)
+	model.InitChannelCache()
 }
 
 // =============================================================================
@@ -257,6 +371,18 @@ func GetOAuthAuthFiles(c *gin.Context) {
 				f["owner_name"] = name
 			}
 		}
+		// pool reservation status: caps + how much OTHERS have consumed in each window
+		if entry, ok := model.GetAccountPoolEntryByAuthFile(n); ok {
+			now := time.Now().Unix()
+			u5h, _ := model.SumOthersQuota(entry.ChannelId, entry.OwnerUserId, now-5*3600)
+			uWk, _ := model.SumOthersQuota(entry.ChannelId, entry.OwnerUserId, now-7*24*3600)
+			f["share_cap_5h"] = entry.ShareCap5h
+			f["share_cap_weekly"] = entry.ShareCapWeekly
+			f["others_usage_5h"] = u5h
+			f["others_usage_weekly"] = uWk
+			f["reward_ratio"] = entry.RewardRatio
+			f["pool_enabled"] = entry.Enabled
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": files})
 }
@@ -290,6 +416,7 @@ func DeleteOAuthAuthFile(c *gin.Context) {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		_ = model.DeleteOAuthFileOwner(name)
+		deprovisionPoolAccount(name)
 		c.JSON(http.StatusOK, gin.H{"success": true, "message": "disconnected"})
 		return
 	}
@@ -339,4 +466,70 @@ func GetCPAHealth(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "", "data": gin.H{
 		"cpa_reachable": resp.StatusCode < 500, "cpa_base_url": cpaBaseURL(),
 	}})
+}
+
+// =============================================================================
+// Reservation caps + contribution reward (owner-facing)
+// =============================================================================
+
+// UpdateOAuthAccountCaps lets the contributor (or an admin) set how much OTHER
+// users may consume from their account per 5h window / per week.
+// PUT /api/oauth-provider/auth-files/:id/caps
+func UpdateOAuthAccountCaps(c *gin.Context) {
+	name := c.Param("id")
+	userId := c.GetInt("id")
+	role := c.GetInt("role")
+	entry, ok := model.GetAccountPoolEntryByAuthFile(name)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "account is not in the pool"})
+		return
+	}
+	if role < common.RoleAdminUser && entry.OwnerUserId != userId {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "only the contributor or an admin can change caps"})
+		return
+	}
+	var body struct {
+		ShareCap5h     *int `json:"share_cap_5h"`
+		ShareCapWeekly *int `json:"share_cap_weekly"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "invalid body"})
+		return
+	}
+	cap5h, capWk := entry.ShareCap5h, entry.ShareCapWeekly
+	if body.ShareCap5h != nil && *body.ShareCap5h >= 0 {
+		cap5h = *body.ShareCap5h
+	}
+	if body.ShareCapWeekly != nil && *body.ShareCapWeekly >= 0 {
+		capWk = *body.ShareCapWeekly
+	}
+	if err := model.UpdateAccountPoolCaps(entry.Id, cap5h, capWk); err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// GetContributionBalance returns the caller's accrued/transferred reward quota.
+// GET /api/oauth-provider/contribution
+func GetContributionBalance(c *gin.Context) {
+	l, err := model.GetContributionLedger(c.GetInt("id"))
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{
+		"accrued": l.Accrued, "transferred": l.Transferred,
+	}})
+}
+
+// TransferContribution moves accrued reward quota into the caller's wallet.
+// POST /api/oauth-provider/contribution/transfer
+func TransferContribution(c *gin.Context) {
+	moved, err := model.TransferContributionToWallet(c.GetInt("id"))
+	if err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"moved": moved}})
 }

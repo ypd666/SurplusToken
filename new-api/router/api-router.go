@@ -296,6 +296,11 @@ func SetApiRouter(router *gin.Engine) {
 			oauthProviderRoute.GET("/auth-files", controller.GetOAuthAuthFiles)
 			// Disconnect/delete an OAuth account
 			oauthProviderRoute.DELETE("/auth-files/:id", controller.DeleteOAuthAuthFile)
+			// Update reservation caps for a contributed account (owner/admin)
+			oauthProviderRoute.PUT("/auth-files/:id/caps", controller.UpdateOAuthAccountCaps)
+			// Contribution reward balance + transfer to wallet
+			oauthProviderRoute.GET("/contribution", controller.GetContributionBalance)
+			oauthProviderRoute.POST("/contribution/transfer", controller.TransferContribution)
 			// Poll OAuth flow status
 			oauthProviderRoute.GET("/status", controller.GetOAuthStatus)
 			// CPA health check (admin only)

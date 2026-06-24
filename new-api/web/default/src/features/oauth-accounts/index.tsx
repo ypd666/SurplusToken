@@ -18,6 +18,9 @@ import {
   getOAuthAuthFiles,
   getOAuthAuthorizeURL,
   deleteOAuthAuthFile,
+  updateAccountCaps,
+  getContribution,
+  transferContribution,
 } from './api'
 import type { OAuthProvider, OAuthAuthFile } from './types'
 
@@ -63,6 +66,41 @@ export function OAuthAccounts() {
       toast.error(t('Failed to disconnect account'))
     },
   })
+
+  // Contribution reward balance
+  const contributionQuery = useQuery({
+    queryKey: ['oauth-contribution'],
+    queryFn: getContribution,
+    refetchInterval: 30_000,
+  })
+  const transferMutation = useMutation({
+    mutationFn: transferContribution,
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['oauth-contribution'] })
+      toast.success(t('Transferred {{n}} quota to your wallet', { n: res.data?.moved ?? 0 }))
+    },
+    onError: () => toast.error(t('Transfer failed')),
+  })
+  const capsMutation = useMutation({
+    mutationFn: ({ id, caps }: { id: string; caps: { share_cap_5h?: number; share_cap_weekly?: number } }) =>
+      updateAccountCaps(id, caps),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['oauth-auth-files'] })
+      toast.success(t('Caps updated'))
+    },
+    onError: () => toast.error(t('Failed to update caps')),
+  })
+
+  const handleEditCaps = (af: OAuthAuthFile) => {
+    const in5h = window.prompt(t('Max quota others may use per 5h window'), String(af.share_cap_5h ?? 0))
+    if (in5h === null) return
+    const inWk = window.prompt(t('Max quota others may use per week'), String(af.share_cap_weekly ?? 0))
+    if (inWk === null) return
+    capsMutation.mutate({
+      id: encodeURIComponent(af.name || af.id),
+      caps: { share_cap_5h: Number(in5h), share_cap_weekly: Number(inWk) },
+    })
+  }
 
   const handleConnect = async (provider: OAuthProvider) => {
     setConnectingProvider(provider.id)
@@ -157,6 +195,37 @@ export function OAuthAccounts() {
           </CardContent>
         </Card>
 
+        {/* Contribution reward */}
+        <Card className='mb-6'>
+          <CardHeader>
+            <CardTitle>{t('Contribution Reward')}</CardTitle>
+            <p className='text-muted-foreground text-sm'>
+              {t('Quota you earn when other users consume the accounts you contributed.')}
+            </p>
+          </CardHeader>
+          <CardContent>
+            <div className='flex items-center justify-between'>
+              <div className='text-sm'>
+                <div>
+                  {t('Available')}:{' '}
+                  <span className='font-medium'>{contributionQuery.data?.data?.accrued ?? 0}</span>
+                </div>
+                <div className='text-muted-foreground'>
+                  {t('Transferred')}: {contributionQuery.data?.data?.transferred ?? 0}
+                </div>
+              </div>
+              <Button
+                size='sm'
+                disabled={transferMutation.isPending || (contributionQuery.data?.data?.accrued ?? 0) <= 0}
+                onClick={() => transferMutation.mutate()}
+              >
+                {transferMutation.isPending ? <Spinner className='mr-2 h-4 w-4' /> : null}
+                {t('Transfer to wallet')}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
         {/* Connected Accounts */}
         <Card>
           <CardHeader>
@@ -183,6 +252,7 @@ export function OAuthAccounts() {
                       <th className='pb-2 font-medium'>{t('Account')}</th>
                       <th className='pb-2 font-medium'>{t('Contributor')}</th>
                       <th className='pb-2 font-medium'>{t('Status')}</th>
+                      <th className='pb-2 font-medium'>{t('Shared (5h / week)')}</th>
                       <th className='pb-2 text-right font-medium'>{t('Actions')}</th>
                     </tr>
                   </thead>
@@ -216,7 +286,23 @@ export function OAuthAccounts() {
                             <Badge variant='success'>{t('Active')}</Badge>
                           )}
                         </td>
+                        <td className='py-3 text-muted-foreground'>
+                          {af.share_cap_5h !== undefined ? (
+                            <span className='whitespace-nowrap'>
+                              {(af.others_usage_5h ?? 0)}/{af.share_cap_5h}
+                              {' · '}
+                              {(af.others_usage_weekly ?? 0)}/{af.share_cap_weekly}
+                            </span>
+                          ) : (
+                            <span>—</span>
+                          )}
+                        </td>
                         <td className='py-3 text-right'>
+                          {af.is_mine && af.share_cap_5h !== undefined && (
+                            <Button variant='ghost' size='sm' onClick={() => handleEditCaps(af)}>
+                              {t('Edit caps')}
+                            </Button>
+                          )}
                           {af.can_delete === false ? (
                             <Button
                               variant='ghost'

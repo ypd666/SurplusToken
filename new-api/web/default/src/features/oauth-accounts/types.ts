@@ -26,6 +26,13 @@ export interface OAuthAuthFile {
   owner_name?: string
   is_mine?: boolean
   can_delete?: boolean
+  // Reservation pool metadata (present when the account is in the pool)
+  share_cap_5h?: number
+  share_cap_weekly?: number
+  others_usage_5h?: number
+  others_usage_weekly?: number
+  reward_ratio?: number
+  pool_enabled?: boolean
 }
 
 export interface OAuthAuthorizeResponse {

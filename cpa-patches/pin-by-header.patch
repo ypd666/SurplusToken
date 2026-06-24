@@ -1,0 +1,17 @@
+--- a/sdk/api/handlers/handlers.go
++++ b/sdk/api/handlers/handlers.go
+@@ -566,6 +566,14 @@
+ 		}()
+ 	}
+ 	newCtx = context.WithValue(newCtx, "gin", c)
++	// SurplusToken: let an internal pool channel pin a specific upstream account
++	// by forwarding the X-Pinned-Auth-Id header. Must never be settable from a
++	// public relay client (strip it at any public ingress to CPA).
++	if c != nil && c.Request != nil {
++		if pinned := strings.TrimSpace(c.GetHeader("X-Pinned-Auth-Id")); pinned != "" {
++			newCtx = WithPinnedAuthID(newCtx, pinned)
++		}
++	}
+ 	newCtx = context.WithValue(newCtx, "handler", handler)
+ 	return newCtx, func(params ...interface{}) {
+ 		if c != nil {
