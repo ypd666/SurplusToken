@@ -1,5 +1,12 @@
 {
   "translation": {
+    "Finish connecting your account": "完成账号连接",
+    "Authorization redirects to a localhost address that only works on the server. Complete it here by pasting that address.": "授权会跳转到一个只有服务器本机才能接收的 localhost 地址。在这里粘贴该地址来完成连接。",
+    "Log in and authorize in the popup window.": "在弹出的窗口里登录并授权。",
+    "After you authorize, the browser opens an http://localhost:1455/... page that fails to load — that is expected.": "授权后,浏览器会跳到一个 http://localhost:1455/... 的页面并提示「无法访问」——这是正常的。",
+    "Copy the FULL address from that page address bar (it starts with http://localhost and contains code= and state=).": "复制那个页面地址栏里的完整网址(以 http://localhost 开头,包含 code= 和 state=)。",
+    "Paste it below and click Finish.": "粘贴到下面,点「完成连接」。",
+    "Finish connecting": "完成连接",
     "360": "360",
     "1000": "1000",
     "10000": "10000",

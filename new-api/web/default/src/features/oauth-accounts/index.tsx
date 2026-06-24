@@ -26,6 +26,7 @@ import {
   removeAccountOwner,
   approveAccountOwner,
   requestJoinAccount,
+  completeOAuthCallback,
 } from './api'
 import type { OAuthProvider, OAuthAuthFile, AccountOwner } from './types'
 import { useIsAdmin } from '@/hooks/use-admin'
@@ -46,6 +47,8 @@ export function OAuthAccounts() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [connectingProvider, setConnectingProvider] = useState<string | null>(null)
+  const [pasteDialogOpen, setPasteDialogOpen] = useState(false)
+  const [pasteUrl, setPasteUrl] = useState('')
 
   // Fetch providers
   const providersQuery = useQuery({
@@ -141,39 +144,43 @@ export function OAuthAccounts() {
     try {
       const res = await getOAuthAuthorizeURL(provider.id)
       if (res.success && res.data?.url) {
-        // Open OAuth flow in a popup or redirect
         const width = 600
         const height = 700
         const left = window.screenX + (window.outerWidth - width) / 2
         const top = window.screenY + (window.outerHeight - height) / 2
-        const popup = window.open(
+        window.open(
           res.data.url,
           `oauth-${provider.id}`,
           `width=${width},height=${height},left=${left},top=${top}`,
         )
-        if (popup) {
-          // Poll for popup close, then refresh
-          const timer = setInterval(() => {
-            if (popup.closed) {
-              clearInterval(timer)
-              queryClient.invalidateQueries({ queryKey: ['oauth-auth-files'] })
-              setConnectingProvider(null)
-              toast.success(t('OAuth flow completed'))
-            }
-          }, 1000)
-        } else {
-          // Fallback: direct redirect
-          window.location.href = res.data.url
-        }
+        // The provider redirects to http://localhost:1455/... which can't reach
+        // CPA from a remote browser — so collect the redirect URL via the dialog.
+        setPasteUrl('')
+        setPasteDialogOpen(true)
       } else {
         toast.error(res.message || t('Failed to get authorization URL'))
-        setConnectingProvider(null)
       }
     } catch {
       toast.error(t('Failed to connect to CPA'))
+    } finally {
       setConnectingProvider(null)
     }
   }
+
+  const completeMutation = useMutation({
+    mutationFn: completeOAuthCallback,
+    onSuccess: (res) => {
+      if (res.success) {
+        setPasteDialogOpen(false)
+        setPasteUrl('')
+        queryClient.invalidateQueries({ queryKey: ['oauth-auth-files'] })
+        toast.success(t('Account connected successfully'))
+      } else {
+        toast.error(res.message || t('Authorization failed'))
+      }
+    },
+    onError: () => toast.error(t('Authorization failed')),
+  })
 
   const handleDisconnect = (authFile: OAuthAuthFile) => {
     // CPA identifies auth-files by name; fall back to id if name is absent.
@@ -395,6 +402,44 @@ export function OAuthAccounts() {
             )}
           </CardContent>
         </Card>
+        {/* Finish-connect dialog: paste the localhost redirect URL */}
+        <AlertDialog open={pasteDialogOpen} onOpenChange={(o) => !o && setPasteDialogOpen(false)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t('Finish connecting your account')}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {t('Authorization redirects to a localhost address that only works on the server. Complete it here by pasting that address.')}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <ol className='list-decimal space-y-1 py-2 pl-5 text-sm text-muted-foreground'>
+              <li>{t('Log in and authorize in the popup window.')}</li>
+              <li>{t('After you authorize, the browser opens an http://localhost:1455/... page that fails to load — that is expected.')}</li>
+              <li>{t('Copy the FULL address from that page address bar (it starts with http://localhost and contains code= and state=).')}</li>
+              <li>{t('Paste it below and click Finish.')}</li>
+            </ol>
+            <textarea
+              className='border-input bg-background mt-1 w-full rounded-md border p-2 text-sm'
+              rows={3}
+              placeholder='http://localhost:1455/auth/callback?code=...&state=...'
+              value={pasteUrl}
+              onChange={(e) => setPasteUrl(e.target.value)}
+            />
+            <AlertDialogFooter>
+              <Button variant='ghost' size='sm' onClick={() => setPasteDialogOpen(false)}>
+                {t('Cancel')}
+              </Button>
+              <Button
+                size='sm'
+                disabled={completeMutation.isPending || !pasteUrl.trim()}
+                onClick={() => completeMutation.mutate(pasteUrl.trim())}
+              >
+                {completeMutation.isPending ? <Spinner className='mr-2 h-4 w-4' /> : null}
+                {t('Finish connecting')}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
         {/* Owners management dialog (admin) */}
         <AlertDialog open={!!ownersFor} onOpenChange={(o) => !o && setOwnersFor(null)}>
           <AlertDialogContent>

@@ -309,6 +309,8 @@ func SetApiRouter(router *gin.Engine) {
 			oauthProviderRoute.POST("/contribution/transfer", controller.TransferContribution)
 			// Poll OAuth flow status
 			oauthProviderRoute.GET("/status", controller.GetOAuthStatus)
+			// Complete OAuth by pasting the localhost redirect URL (remote/web contributors)
+			oauthProviderRoute.POST("/callback", controller.CompleteOAuthCallback)
 			// CPA health check (admin only)
 			oauthProviderRoute.GET("/health", middleware.AdminAuth(), controller.GetCPAHealth)
 		}

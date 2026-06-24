@@ -641,3 +641,61 @@ func RequestJoinAccount(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "join request submitted; awaiting admin approval"})
 }
+
+// =============================================================================
+// Manual OAuth callback (remote/web contributors)
+//
+// Codex/Claude OAuth redirect to a fixed http://localhost:<port>/auth/callback,
+// which only works when the browser runs on the CPA host. For web contributors
+// the redirect lands on THEIR machine, so CPA never gets it. This endpoint lets
+// the user paste the redirect URL (code+state) and forwards it to CPA's
+// oauth-callback to finish the flow. The connect-time goroutine then provisions
+// ownership + the pool channel as usual.
+// POST /api/oauth-provider/callback  {"redirect_url": "..."}  (or {code, state})
+// =============================================================================
+func CompleteOAuthCallback(c *gin.Context) {
+	var body struct {
+		RedirectURL string `json:"redirect_url"`
+		Code        string `json:"code"`
+		State       string `json:"state"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	code, state := strings.TrimSpace(body.Code), strings.TrimSpace(body.State)
+	if body.RedirectURL != "" {
+		if u, err := url.Parse(strings.TrimSpace(body.RedirectURL)); err == nil {
+			q := u.Query()
+			if v := q.Get("code"); v != "" {
+				code = v
+			}
+			if v := q.Get("state"); v != "" {
+				state = v
+			}
+		}
+	}
+	if code == "" || state == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Could not read code/state — paste the full address the popup redirected to."})
+		return
+	}
+	payload := strings.NewReader(fmt.Sprintf(`{"code":%q,"state":%q}`, code, state))
+	resp, err := cpaDo(c.Request.Context(), http.MethodPost, "/v0/management/oauth-callback", payload)
+	if err != nil {
+		common.ApiErrorMsg(c, "CPA unreachable: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var parsed struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	_ = json.Unmarshal(raw, &parsed)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || parsed.Status == "error" {
+		msg := parsed.Error
+		if msg == "" {
+			msg = "authorization callback failed"
+		}
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}

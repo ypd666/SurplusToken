@@ -105,3 +105,10 @@ export async function requestJoinAccount(
   const res = await api.post(`/api/oauth-provider/auth-files/${id}/join`)
   return res.data
 }
+
+export async function completeOAuthCallback(
+  redirectUrl: string,
+): Promise<{ success: boolean; message?: string }> {
+  const res = await api.post('/api/oauth-provider/callback', { redirect_url: redirectUrl })
+  return res.data
+}
