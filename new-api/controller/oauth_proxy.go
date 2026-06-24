@@ -697,5 +697,37 @@ func CompleteOAuthCallback(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true})
+
+	// The callback only writes the file; CPA exchanges the code for tokens
+	// asynchronously. Poll get-auth-status so we report the REAL outcome (and
+	// surface the actual error, e.g. a blocked token exchange) instead of a
+	// premature success.
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		time.Sleep(1500 * time.Millisecond)
+		sresp, serr := cpaDo(c.Request.Context(), http.MethodGet, "/v0/management/get-auth-status?state="+url.QueryEscape(state), nil)
+		if serr != nil {
+			continue
+		}
+		sraw, _ := io.ReadAll(io.LimitReader(sresp.Body, 1<<20))
+		sresp.Body.Close()
+		var st struct {
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		}
+		_ = json.Unmarshal(sraw, &st)
+		switch st.Status {
+		case "ok":
+			c.JSON(http.StatusOK, gin.H{"success": true})
+			return
+		case "error":
+			msg := st.Error
+			if msg == "" {
+				msg = "authorization failed"
+			}
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": msg})
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"success": false, "message": "still processing — refresh Connected Accounts in a moment"})
 }
