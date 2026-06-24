@@ -298,6 +298,12 @@ func SetApiRouter(router *gin.Engine) {
 			oauthProviderRoute.DELETE("/auth-files/:id", controller.DeleteOAuthAuthFile)
 			// Update reservation caps for a contributed account (owner/admin)
 			oauthProviderRoute.PUT("/auth-files/:id/caps", controller.UpdateOAuthAccountCaps)
+			// Co-ownership: list owners; admin designate/remove/approve; user join request
+			oauthProviderRoute.GET("/auth-files/:id/owners", controller.ListAccountOwners)
+			oauthProviderRoute.POST("/auth-files/:id/owners", middleware.AdminAuth(), controller.AddAccountOwner)
+			oauthProviderRoute.DELETE("/auth-files/:id/owners/:userId", middleware.AdminAuth(), controller.RemoveAccountOwner)
+			oauthProviderRoute.POST("/auth-files/:id/owners/:userId/approve", middleware.AdminAuth(), controller.ApproveAccountOwner)
+			oauthProviderRoute.POST("/auth-files/:id/join", controller.RequestJoinAccount)
 			// Contribution reward balance + transfer to wallet
 			oauthProviderRoute.GET("/contribution", controller.GetContributionBalance)
 			oauthProviderRoute.POST("/contribution/transfer", controller.TransferContribution)

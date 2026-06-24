@@ -108,6 +108,16 @@ func authFileName(f map[string]interface{}) string {
 	return ""
 }
 
+// containsIntC reports whether v is in s.
+func containsIntC(s []int, v int) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
 // authFileID returns the CPA auth.ID (used as the X-Pinned-Auth-Id value).
 func authFileID(f map[string]interface{}) string {
 	switch v := f["id"].(type) {
@@ -361,21 +371,31 @@ func GetOAuthAuthFiles(c *gin.Context) {
 	isAdmin := role >= common.RoleAdminUser
 	for _, f := range files {
 		n := authFileName(f)
-		ownerId := owners[n]
-		f["owner_user_id"] = ownerId
-		f["is_mine"] = ownerId != 0 && ownerId == userId
-		// untracked accounts (ownerId == 0) are admin-only by design
-		f["can_delete"] = isAdmin || (ownerId != 0 && ownerId == userId)
-		if ownerId != 0 {
-			if name, errName := model.GetUsernameById(ownerId, false); errName == nil {
+		primaryId := owners[n]
+		ownerIds := model.GetActiveOwnerIds(n)
+		isMine := containsIntC(ownerIds, userId)
+		f["owner_user_id"] = primaryId
+		f["is_mine"] = isMine
+		f["owner_count"] = len(ownerIds)
+		// only the sole owner (or an admin) may disconnect; multi-owner = admin-only
+		f["can_delete"] = isAdmin || (len(ownerIds) == 1 && ownerIds[0] == userId)
+		if primaryId != 0 {
+			if name, errName := model.GetUsernameById(primaryId, false); errName == nil {
 				f["owner_name"] = name
 			}
 		}
-		// pool reservation status: caps + how much OTHERS have consumed in each window
+		ownerNames := make([]string, 0, len(ownerIds))
+		for _, oid := range ownerIds {
+			if name, e := model.GetUsernameById(oid, false); e == nil {
+				ownerNames = append(ownerNames, name)
+			}
+		}
+		f["owner_names"] = ownerNames
+		// pool reservation status: caps + how much NON-owners consumed per window
 		if entry, ok := model.GetAccountPoolEntryByAuthFile(n); ok {
 			now := time.Now().Unix()
-			u5h, _ := model.SumOthersQuota(entry.ChannelId, entry.OwnerUserId, now-5*3600)
-			uWk, _ := model.SumOthersQuota(entry.ChannelId, entry.OwnerUserId, now-7*24*3600)
+			u5h, _ := model.SumOthersQuota(entry.ChannelId, ownerIds, now-5*3600)
+			uWk, _ := model.SumOthersQuota(entry.ChannelId, ownerIds, now-7*24*3600)
 			f["share_cap_5h"] = entry.ShareCap5h
 			f["share_cap_weekly"] = entry.ShareCapWeekly
 			f["others_usage_5h"] = u5h
@@ -395,13 +415,17 @@ func DeleteOAuthAuthFile(c *gin.Context) {
 	userId := c.GetInt("id")
 	role := c.GetInt("role")
 
-	ownerId, found := model.GetOAuthFileOwner(name)
+	ownerIds := model.GetActiveOwnerIds(name)
 	if role < common.RoleAdminUser {
-		if !found {
+		if len(ownerIds) == 0 {
 			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "This account was not contributed by you; only an admin can disconnect it."})
 			return
 		}
-		if ownerId != userId {
+		if len(ownerIds) >= 2 {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "This account has multiple owners; only an admin can disconnect it."})
+			return
+		}
+		if ownerIds[0] != userId {
 			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "You can only disconnect accounts you contributed."})
 			return
 		}
@@ -416,6 +440,7 @@ func DeleteOAuthAuthFile(c *gin.Context) {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		_ = model.DeleteOAuthFileOwner(name)
+		_ = model.DeleteCoOwnersByAuthFile(name)
 		deprovisionPoolAccount(name)
 		c.JSON(http.StatusOK, gin.H{"success": true, "message": "disconnected"})
 		return
@@ -532,4 +557,87 @@ func TransferContribution(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true, "data": gin.H{"moved": moved}})
+}
+
+// =============================================================================
+// Multi-owner: co-ownership management (admin designate / user join + approve)
+// =============================================================================
+
+// ListAccountOwners returns the active + pending owners of an account.
+// GET /api/oauth-provider/auth-files/:id/owners
+func ListAccountOwners(c *gin.Context) {
+	name := c.Param("id")
+	out := make([]gin.H, 0, 4)
+	if pid, ok := model.GetOAuthFileOwner(name); ok && pid != 0 {
+		nm, _ := model.GetUsernameById(pid, false)
+		out = append(out, gin.H{"user_id": pid, "username": nm, "status": "active", "primary": true})
+	}
+	co, _ := model.ListCoOwners(name)
+	for _, r := range co {
+		nm, _ := model.GetUsernameById(r.UserId, false)
+		out = append(out, gin.H{"user_id": r.UserId, "username": nm, "status": r.Status, "primary": false})
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "data": out})
+}
+
+// AddAccountOwner designates a co-owner as active (admin only).
+// POST /api/oauth-provider/auth-files/:id/owners   {"user_id": N}
+func AddAccountOwner(c *gin.Context) {
+	name := c.Param("id")
+	var body struct {
+		UserId int `json:"user_id"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil || body.UserId == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "user_id required"})
+		return
+	}
+	if _, err := model.GetUserById(body.UserId, false); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "user not found"})
+		return
+	}
+	if err := model.AddCoOwner(name, body.UserId, model.OwnerStatusActive); err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// RemoveAccountOwner removes a co-owner / rejects a pending join (admin only).
+// DELETE /api/oauth-provider/auth-files/:id/owners/:userId
+func RemoveAccountOwner(c *gin.Context) {
+	name := c.Param("id")
+	uid, _ := strconv.Atoi(c.Param("userId"))
+	if err := model.RemoveCoOwner(name, uid); err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// ApproveAccountOwner approves a pending join request (admin only).
+// POST /api/oauth-provider/auth-files/:id/owners/:userId/approve
+func ApproveAccountOwner(c *gin.Context) {
+	name := c.Param("id")
+	uid, _ := strconv.Atoi(c.Param("userId"))
+	if err := model.ApproveCoOwner(name, uid); err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// RequestJoinAccount lets a user request to co-own an account (pending approval).
+// POST /api/oauth-provider/auth-files/:id/join
+func RequestJoinAccount(c *gin.Context) {
+	name := c.Param("id")
+	userId := c.GetInt("id")
+	if model.IsActiveOwner(name, userId) {
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": "already an owner"})
+		return
+	}
+	if err := model.AddCoOwner(name, userId, model.OwnerStatusPending); err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "join request submitted; awaiting admin approval"})
 }

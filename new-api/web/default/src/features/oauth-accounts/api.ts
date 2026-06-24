@@ -67,3 +67,41 @@ export async function transferContribution(): Promise<{
   const res = await api.post('/api/oauth-provider/contribution/transfer')
   return res.data
 }
+
+export async function listAccountOwners(
+  id: string,
+): Promise<{ success: boolean; data?: import('./types').AccountOwner[] }> {
+  const res = await api.get(`/api/oauth-provider/auth-files/${id}/owners`)
+  return res.data
+}
+
+export async function addAccountOwner(
+  id: string,
+  userId: number,
+): Promise<{ success: boolean; message?: string }> {
+  const res = await api.post(`/api/oauth-provider/auth-files/${id}/owners`, { user_id: userId })
+  return res.data
+}
+
+export async function removeAccountOwner(
+  id: string,
+  userId: number,
+): Promise<{ success: boolean; message?: string }> {
+  const res = await api.delete(`/api/oauth-provider/auth-files/${id}/owners/${userId}`)
+  return res.data
+}
+
+export async function approveAccountOwner(
+  id: string,
+  userId: number,
+): Promise<{ success: boolean; message?: string }> {
+  const res = await api.post(`/api/oauth-provider/auth-files/${id}/owners/${userId}/approve`)
+  return res.data
+}
+
+export async function requestJoinAccount(
+  id: string,
+): Promise<{ success: boolean; message?: string }> {
+  const res = await api.post(`/api/oauth-provider/auth-files/${id}/join`)
+  return res.data
+}

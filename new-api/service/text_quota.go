@@ -474,12 +474,18 @@ func PostTextConsumeQuota(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, us
 		Other:            other,
 	})
 
-	// SurplusToken: reward the contributor when a non-owner consumed a pooled
-	// account. Reward = Quota * RewardRatio, accrued to the owner's ledger.
-	if entry, ok := model.GetAccountPoolEntryByChannel(relayInfo.ChannelId); ok && entry.Enabled &&
-		relayInfo.UserId != entry.OwnerUserId && summary.Quota > 0 {
-		if reward := int64(float64(summary.Quota) * entry.RewardRatio); reward > 0 {
-			_ = model.AccrueContributionReward(entry.OwnerUserId, reward)
+	// SurplusToken: reward the contributors when a non-owner consumed a pooled
+	// account. Reward = Quota * RewardRatio, split evenly across the active owner
+	// set (primary contributor + active co-owners); remainder dropped.
+	if entry, ok := model.GetAccountPoolEntryByChannel(relayInfo.ChannelId); ok && entry.Enabled && summary.Quota > 0 {
+		ownerIds := model.GetActiveOwnerIds(entry.AuthFile)
+		if len(ownerIds) > 0 && !ContainsInt(ownerIds, relayInfo.UserId) {
+			reward := int64(float64(summary.Quota) * entry.RewardRatio)
+			if share := reward / int64(len(ownerIds)); share > 0 {
+				for _, oid := range ownerIds {
+					_ = model.AccrueContributionReward(oid, share)
+				}
+			}
 		}
 	}
 

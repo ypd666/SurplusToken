@@ -296,6 +296,7 @@ func migrateDB() error {
 		&OAuthFileOwner{},
 		&AccountPoolEntry{},
 		&ContributionLedger{},
+		&AccountOwner{},
 		&PerfMetric{},
 		&SystemTask{},
 	)

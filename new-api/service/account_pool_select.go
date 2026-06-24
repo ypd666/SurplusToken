@@ -23,46 +23,58 @@ const (
 	weekSeconds     = 7 * 24 * 3600
 )
 
+// ContainsInt reports whether v is in s.
+func ContainsInt(s []int, v int) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
 // ResolvePoolChannel chooses the upstream channel for a pool-group request.
 //
-//   - If the requester contributed an account that can serve the model, route to
-//     their OWN account (the owner is never capped on their own account).
-//   - Otherwise pick a contributed account whose consumption by OTHER users is
+//   - If the requester is in an account's active owner set, route to that account
+//     (owners are never capped on accounts they co-own).
+//   - Otherwise pick a contributed account whose consumption by NON-owners is
 //     still under its 5h and weekly share caps.
 //
 // Returns an error (surfaced as 503) when no account has surplus capacity.
 func ResolvePoolChannel(c *gin.Context, modelName string) (*model.Channel, error) {
 	requesterId := c.GetInt("id")
-
-	// owner path — prefer the requester's own contributed account
-	if owned, _ := model.ListEnabledPoolChannelsForOwner(requesterId); len(owned) > 0 {
-		for _, e := range owned {
-			if !model.IsChannelEnabledForGroupModel(PoolGroup, modelName, e.ChannelId) {
-				continue
-			}
-			if ch, err := model.GetChannelById(e.ChannelId, true); err == nil && ch.Status == common.ChannelStatusEnabled {
-				return ch, nil
-			}
-		}
-	}
-
-	// non-owner path — first account with remaining shared capacity
 	entries, _ := model.ListEnabledPoolEntries()
 	now := time.Now().Unix()
 	since5h := now - fiveHourSeconds
 	since7d := now - weekSeconds
+
+	// owner path — route to an account the requester co-owns (uncapped)
 	for _, e := range entries {
-		if e.OwnerUserId == requesterId {
-			continue
-		}
 		if !model.IsChannelEnabledForGroupModel(PoolGroup, modelName, e.ChannelId) {
 			continue
 		}
-		usage5h, err := model.SumOthersQuota(e.ChannelId, e.OwnerUserId, since5h)
+		if !model.IsActiveOwner(e.AuthFile, requesterId) {
+			continue
+		}
+		if ch, err := model.GetChannelById(e.ChannelId, true); err == nil && ch.Status == common.ChannelStatusEnabled {
+			return ch, nil
+		}
+	}
+
+	// non-owner path — first account with remaining shared capacity
+	for _, e := range entries {
+		if !model.IsChannelEnabledForGroupModel(PoolGroup, modelName, e.ChannelId) {
+			continue
+		}
+		ownerIds := model.GetActiveOwnerIds(e.AuthFile)
+		if ContainsInt(ownerIds, requesterId) {
+			continue
+		}
+		usage5h, err := model.SumOthersQuota(e.ChannelId, ownerIds, since5h)
 		if err != nil || usage5h >= int64(e.ShareCap5h) {
 			continue
 		}
-		usageWeek, err := model.SumOthersQuota(e.ChannelId, e.OwnerUserId, since7d)
+		usageWeek, err := model.SumOthersQuota(e.ChannelId, ownerIds, since7d)
 		if err != nil || usageWeek >= int64(e.ShareCapWeekly) {
 			continue
 		}

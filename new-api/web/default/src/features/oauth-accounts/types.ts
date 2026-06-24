@@ -33,6 +33,15 @@ export interface OAuthAuthFile {
   others_usage_weekly?: number
   reward_ratio?: number
   pool_enabled?: boolean
+  owner_count?: number
+  owner_names?: string[]
+}
+
+export interface AccountOwner {
+  user_id: number
+  username?: string
+  status: string
+  primary: boolean
 }
 
 export interface OAuthAuthorizeResponse {

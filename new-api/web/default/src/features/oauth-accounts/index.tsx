@@ -21,8 +21,14 @@ import {
   updateAccountCaps,
   getContribution,
   transferContribution,
+  listAccountOwners,
+  addAccountOwner,
+  removeAccountOwner,
+  approveAccountOwner,
+  requestJoinAccount,
 } from './api'
-import type { OAuthProvider, OAuthAuthFile } from './types'
+import type { OAuthProvider, OAuthAuthFile, AccountOwner } from './types'
+import { useIsAdmin } from '@/hooks/use-admin'
 
 function ProviderIcon({ icon }: { icon: string }) {
   const icons: Record<string, string> = {
@@ -100,6 +106,34 @@ export function OAuthAccounts() {
       id: encodeURIComponent(af.name || af.id),
       caps: { share_cap_5h: Number(in5h), share_cap_weekly: Number(inWk) },
     })
+  }
+
+  // Multi-owner management
+  const isAdmin = useIsAdmin()
+  const ownerId = (af: OAuthAuthFile) => encodeURIComponent(af.name || af.id)
+  const [ownersFor, setOwnersFor] = useState<OAuthAuthFile | null>(null)
+  const ownersQuery = useQuery({
+    queryKey: ['oauth-owners', ownersFor ? ownerId(ownersFor) : null],
+    queryFn: () => listAccountOwners(ownerId(ownersFor!)),
+    enabled: !!ownersFor,
+  })
+  const joinMutation = useMutation({
+    mutationFn: (af: OAuthAuthFile) => requestJoinAccount(ownerId(af)),
+    onSuccess: (res) => toast.success(res.message || t('Join request submitted')),
+    onError: () => toast.error(t('Failed to request join')),
+  })
+  const ownerMutation = useMutation({
+    mutationFn: (fn: () => Promise<unknown>) => fn(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['oauth-owners'] })
+      queryClient.invalidateQueries({ queryKey: ['oauth-auth-files'] })
+    },
+    onError: () => toast.error(t('Operation failed')),
+  })
+  const handleAddOwner = (af: OAuthAuthFile) => {
+    const uid = window.prompt(t('User ID to add as co-owner'))
+    if (!uid) return
+    ownerMutation.mutate(() => addAccountOwner(ownerId(af), Number(uid)))
   }
 
   const handleConnect = async (provider: OAuthProvider) => {
@@ -276,6 +310,9 @@ export function OAuthAccounts() {
                           ) : (
                             <span className='text-muted-foreground'>—</span>
                           )}
+                          {(af.owner_count ?? 0) > 1 && (
+                            <span className='text-muted-foreground ml-1 text-xs'>+{(af.owner_count ?? 1) - 1}</span>
+                          )}
                         </td>
                         <td className='py-3'>
                           {af.disabled ? (
@@ -298,6 +335,16 @@ export function OAuthAccounts() {
                           )}
                         </td>
                         <td className='py-3 text-right'>
+                          {!af.is_mine && (
+                            <Button variant='ghost' size='sm' disabled={joinMutation.isPending} onClick={() => joinMutation.mutate(af)}>
+                              {t('Request to join')}
+                            </Button>
+                          )}
+                          {isAdmin && (
+                            <Button variant='ghost' size='sm' onClick={() => setOwnersFor(af)}>
+                              {t('Owners')}
+                            </Button>
+                          )}
                           {af.is_mine && af.share_cap_5h !== undefined && (
                             <Button variant='ghost' size='sm' onClick={() => handleEditCaps(af)}>
                               {t('Edit caps')}
@@ -348,6 +395,58 @@ export function OAuthAccounts() {
             )}
           </CardContent>
         </Card>
+        {/* Owners management dialog (admin) */}
+        <AlertDialog open={!!ownersFor} onOpenChange={(o) => !o && setOwnersFor(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t('Account Owners')}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {ownersFor?.email || ownersFor?.name || ownersFor?.id}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <div className='space-y-2 py-2'>
+              {(ownersQuery.data?.data || []).map((o: AccountOwner) => (
+                <div key={o.user_id} className='flex items-center justify-between text-sm'>
+                  <span>
+                    {o.username || o.user_id}
+                    {o.primary && <span className='text-muted-foreground'> ({t('primary')})</span>}
+                    {o.status === 'pending' && (
+                      <Badge variant='warning' className='ml-1 text-xs'>{t('pending')}</Badge>
+                    )}
+                  </span>
+                  <span className='flex gap-1'>
+                    {o.status === 'pending' && (
+                      <Button
+                        size='sm'
+                        variant='ghost'
+                        onClick={() => ownerMutation.mutate(() => approveAccountOwner(ownerId(ownersFor!), o.user_id))}
+                      >
+                        {t('Approve')}
+                      </Button>
+                    )}
+                    {!o.primary && (
+                      <Button
+                        size='sm'
+                        variant='ghost'
+                        onClick={() => ownerMutation.mutate(() => removeAccountOwner(ownerId(ownersFor!), o.user_id))}
+                      >
+                        {t('Remove')}
+                      </Button>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <AlertDialogFooter>
+              <Button variant='outline' size='sm' onClick={() => ownersFor && handleAddOwner(ownersFor)}>
+                {t('Add co-owner')}
+              </Button>
+              <Button variant='ghost' size='sm' onClick={() => setOwnersFor(null)}>
+                {t('Close')}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </SectionPageLayout.Content>
     </SectionPageLayout>
   )

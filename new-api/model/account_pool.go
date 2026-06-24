@@ -104,13 +104,15 @@ func UpdateAccountPoolCaps(id, cap5h, capWeekly int) error {
 	}).Error
 }
 
-// SumOthersQuota returns the quota consumed on a pool channel by users OTHER
-// than the owner since the given unix timestamp. It backs the per-account 5h /
-// weekly share-cap enforcement (owner usage never counts against the caps).
-func SumOthersQuota(channelId, ownerUserId int, since int64) (int64, error) {
+// SumOthersQuota returns the quota consumed on a pool channel by users NOT in
+// the account's active owner set since the given unix timestamp. It backs the
+// per-account 5h / weekly share-cap enforcement (owner usage never counts).
+func SumOthersQuota(channelId int, ownerIds []int, since int64) (int64, error) {
 	var total int64
-	err := LOG_DB.Model(&Log{}).
-		Where("channel_id = ? AND user_id <> ? AND created_at >= ?", channelId, ownerUserId, since).
-		Select("COALESCE(SUM(quota),0)").Scan(&total).Error
+	q := LOG_DB.Model(&Log{}).Where("channel_id = ? AND created_at >= ?", channelId, since)
+	if len(ownerIds) > 0 {
+		q = q.Where("user_id NOT IN ?", ownerIds)
+	}
+	err := q.Select("COALESCE(SUM(quota),0)").Scan(&total).Error
 	return total, err
 }
